@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.blocking import BlockingScheduler
-from telegram import Bot
+from telegram.ext import Application
 from dotenv import load_dotenv
 
 # ---------- config ----------
@@ -20,7 +20,8 @@ CHANNEL_ID     = os.getenv("CHANNEL_ID", "@loot_fast_dealss")
 
 assert TELEGRAM_TOKEN, "Set TELEGRAM_TOKEN in environment"
 
-bot = Bot(token=TELEGRAM_TOKEN)
+application = Application.builder().token(TELEGRAM_TOKEN).build()
+bot = application.bot
 
 DB = "prices.db"
 
