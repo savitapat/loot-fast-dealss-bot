@@ -302,5 +302,35 @@ def main():
     except (KeyboardInterrupt, SystemExit):
         sched.shutdown()
 
+from flask import Flask
+import threading
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running ✅"
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+
+def start_bot():
+    init_db()
+    print("Loot Fast Dealss bot started ✨")
+    sched = BackgroundScheduler()
+    sched.add_job(job_flipkart, 'interval', minutes=FK_INTERVAL_MIN, id='flipkart')
+    sched.add_job(job_amazon, 'interval', minutes=AMZ_INTERVAL_MIN, id='amazon')
+    sched.start()
+
+    try:
+        while True:
+            time.sleep(2)
+    except (KeyboardInterrupt, SystemExit):
+        sched.shutdown()
+
+
 if __name__ == '__main__':
-    main()
+    threading.Thread(target=start_bot, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
