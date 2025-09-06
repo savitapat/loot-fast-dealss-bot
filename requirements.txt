@@ -1,7 +1,7 @@
-python-telegram-bot==20.3
+flask
 python-dotenv
 requests
 beautifulsoup4
 lxml
 apscheduler
-flask
+python-telegram-bot==20.3
