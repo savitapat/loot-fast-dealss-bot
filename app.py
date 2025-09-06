@@ -2,7 +2,7 @@
 # Loot Fast Dealss bot with Flask + Telegram + Scheduler
 # Deployable on Render
 
-import os, re, time, random, sqlite3
+import os, re, time, random, sqlite3, asyncio
 from urllib.parse import urljoin
 from dotenv import load_dotenv
 
@@ -146,7 +146,7 @@ def post_deals(items):
                 f"💰 Price: ₹{it['price']} (↓{discount}% off)\n\n"
                 f"🔗 {it['link']}"
             )
-            bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode="Markdown", disable_web_page_preview=False)
+            asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode="Markdown", disable_web_page_preview=False))
             print(f"✅ Posted deal: {it['title']}")
             time.sleep(2)
         except Exception as e:
@@ -181,7 +181,7 @@ def main():
     # Startup test message
     try:
         print("📨 Trying to send startup message...")
-        bot.send_message(chat_id=CHANNEL_ID, text="✅ Bot deployed and running on Render!")
+        asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text="✅ Bot deployed and running on Render!"))
         print("✅ Startup message sent to Telegram channel")
     except Exception as e:
         print(f"❌ Failed to send startup message: {e}")
