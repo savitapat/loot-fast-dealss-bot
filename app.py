@@ -2,7 +2,7 @@
 # Loot Fast Dealss bot with Flask + Telegram + Scheduler
 # Deployable on Render
 
-import os, re, time, math, random, sqlite3
+import os, re, time, random, sqlite3
 from urllib.parse import urljoin
 from dotenv import load_dotenv
 
@@ -11,7 +11,6 @@ from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
 from telegram.ext import Application
 from flask import Flask
-import telegram
 
 # ---------- config ----------
 load_dotenv(override=True)
@@ -19,8 +18,8 @@ load_dotenv(override=True)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-assert TELEGRAM_TOKEN, "Set TELEGRAM_TOKEN in environment"
-assert CHANNEL_ID, "Set CHANNEL_ID in environment"
+assert TELEGRAM_TOKEN, "❌ TELEGRAM_TOKEN missing in environment"
+assert CHANNEL_ID, "❌ CHANNEL_ID missing in environment"
 
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 bot = application.bot
@@ -30,8 +29,8 @@ DB = "prices.db"
 BIG_DISCOUNT_PCT = 55
 SUDDEN_DROP_PCT = 50
 COOLDOWN_HOURS = 12
-AMZ_INTERVAL_MIN = 15   # run every 15 min
-FK_INTERVAL_MIN = 10    # run every 10 min
+AMZ_INTERVAL_MIN = 15
+FK_INTERVAL_MIN = 10
 
 HEADERS_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -83,7 +82,7 @@ def pct(curr, base):
 
 # ---------- scrapers ----------
 def scrape_amazon():
-    print("Scraping Amazon deals...")
+    print("🔎 Scraping Amazon deals...")
     url = "https://www.amazon.in/gp/goldbox"
     html = fetch_url(url)
     if not html:
@@ -107,11 +106,11 @@ def scrape_amazon():
         except Exception as e:
             print("Amazon parse error:", e)
             continue
-    print(f"Found {len(items)} Amazon items")
+    print(f"✅ Found {len(items)} Amazon items")
     return items
 
 def scrape_flipkart():
-    print("Scraping Flipkart deals...")
+    print("🔎 Scraping Flipkart deals...")
     url = "https://www.flipkart.com/offers"
     html = fetch_url(url)
     if not html:
@@ -131,7 +130,7 @@ def scrape_flipkart():
         except Exception as e:
             print("Flipkart parse error:", e)
             continue
-    print(f"Found {len(items)} Flipkart items")
+    print(f"✅ Found {len(items)} Flipkart items")
     return items
 
 # ---------- posting ----------
@@ -148,7 +147,7 @@ def post_deals(items):
                 f"🔗 {it['link']}"
             )
             bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode="Markdown", disable_web_page_preview=False)
-            print(f"Posted deal: {it['title']}")
+            print(f"✅ Posted deal: {it['title']}")
             time.sleep(2)
         except Exception as e:
             print(f"[Telegram post error] {e}")
@@ -177,20 +176,23 @@ def health():
 # ---------- main ----------
 def main():
     init_db()
-    print("Loot Fast Dealss bot starting ✨")
+    print("⚡ Loot Fast Dealss bot starting...")
 
     # Startup test message
     try:
+        print("📨 Trying to send startup message...")
         bot.send_message(chat_id=CHANNEL_ID, text="✅ Bot deployed and running on Render!")
-        print("Startup message sent ✅")
+        print("✅ Startup message sent to Telegram channel")
     except Exception as e:
         print(f"❌ Failed to send startup message: {e}")
 
+    # Scheduler
     sched = BackgroundScheduler()
     sched.add_job(job_flipkart, "interval", minutes=FK_INTERVAL_MIN, id="flipkart")
     sched.add_job(job_amazon, "interval", minutes=AMZ_INTERVAL_MIN, id="amazon")
     sched.start()
 
+    print("🌍 Starting Flask server...")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=False)
 
 if __name__ == "__main__":
