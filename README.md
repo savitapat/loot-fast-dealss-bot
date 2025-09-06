@@ -1,2 +1,3 @@
-Loot Fast Dealss — Telegram Bot
+# Loot Fast Dealss — Telegram Bot
+
 See documentation for setup.
