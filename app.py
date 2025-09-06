@@ -290,6 +290,7 @@ def job_flipkart():
 # ---------- main ----------
 def main():
     init_db()
+    bot.send_message(chat_id=CHANNEL_ID, text="✅ Bot deployed and running on Render!")
     print("Loot Fast Dealss bot started ✨")
     sched = BackgroundScheduler()
     sched.add_job(job_flipkart, 'interval', minutes=FK_INTERVAL_MIN, id='flipkart')
