@@ -1,16 +1,17 @@
 # app.py
-# Loot Fast Dealss bot with Flask + Telegram + Scheduler
+# Loot Fast Dealss bot with Flask + Telegram + Scheduler + Status API
 # Deployable on Render
 
 import os, re, time, random, sqlite3, asyncio
 from urllib.parse import urljoin
 from dotenv import load_dotenv
+from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
 from telegram.ext import Application
-from flask import Flask
+from flask import Flask, jsonify
 
 # ---------- config ----------
 load_dotenv(override=True)
@@ -26,7 +27,7 @@ bot = application.bot
 
 DB = "prices.db"
 
-BIG_DISCOUNT_PCT = 55
+BIG_DISCOUNT_PCT = 45       # lowered from 55
 SUDDEN_DROP_PCT = 50
 COOLDOWN_HOURS = 12
 AMZ_INTERVAL_MIN = 15
@@ -37,6 +38,11 @@ HEADERS_POOL = [
     "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/125.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15"
 ]
+
+# ---------- state tracking ----------
+last_post_time = None
+last_post_source = None
+deal_counter = 0
 
 # ---------- DB ----------
 def init_db():
@@ -117,24 +123,28 @@ def scrape_flipkart():
         return []
     soup = BeautifulSoup(html, "lxml")
     items = []
-    for c in soup.select("a[href*='/p/']"):
-        try:
-            link = urljoin(url, c["href"].split("?")[0])
-            title = c.get_text(strip=True)[:100]
-            parent = c.find_parent()
-            block = parent.get_text(" ", strip=True) if parent else ""
-            price = parse_price(block)
-            if not price or not title:
+    # Try multiple selectors
+    selectors = ["a._1fQZEK", "a.s1Q9rs", "a[href*='/p/']"]
+    for sel in selectors:
+        for c in soup.select(sel):
+            try:
+                link = urljoin(url, c["href"].split("?")[0])
+                title = c.get_text(strip=True)[:100]
+                parent = c.find_parent()
+                block = parent.get_text(" ", strip=True) if parent else ""
+                price = parse_price(block)
+                if not price or not title:
+                    continue
+                items.append({"title": title, "link": link, "price": price, "mrp": price, "source": "Flipkart"})
+            except Exception as e:
+                print("Flipkart parse error:", e)
                 continue
-            items.append({"title": title, "link": link, "price": price, "mrp": price, "source": "Flipkart"})
-        except Exception as e:
-            print("Flipkart parse error:", e)
-            continue
     print(f"✅ Found {len(items)} Flipkart items")
     return items
 
 # ---------- posting ----------
 def post_deals(items):
+    global last_post_time, last_post_source, deal_counter
     for it in items:
         try:
             discount = pct(it["price"], it.get("mrp", it["price"]))
@@ -148,6 +158,9 @@ def post_deals(items):
             )
             asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode="Markdown", disable_web_page_preview=False))
             print(f"✅ Posted deal: {it['title']}")
+            deal_counter += 1
+            last_post_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            last_post_source = it["source"]
             time.sleep(2)
         except Exception as e:
             print(f"[Telegram post error] {e}")
@@ -172,6 +185,14 @@ def home():
 @app.route("/health")
 def health():
     return {"status": "ok"}
+
+@app.route("/status")
+def status():
+    return jsonify({
+        "last_post_time": last_post_time,
+        "last_post_source": last_post_source,
+        "deals_posted": deal_counter
+    })
 
 # ---------- main ----------
 def main():
