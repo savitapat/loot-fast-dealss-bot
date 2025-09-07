@@ -1,13 +1,11 @@
 # app.py
-import os, re, time, random, asyncio, threading
+import os, re, time, random, asyncio
 from urllib.parse import urljoin
-from dotenv import load_dotenv
 from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
+from dotenv import load_dotenv
 from telegram.ext import Application
 from flask import Flask
 
@@ -19,9 +17,10 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 bot = application.bot
 
-# fast testing
-AMZ_INTERVAL_MIN = 2
-FK_INTERVAL_MIN = 1
+# intervals (seconds for test)
+AMZ_INTERVAL = 120   # 2 min
+FK_INTERVAL = 60     # 1 min
+LAST_AMZ, LAST_FK = 0, 0
 
 HEADERS_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0 Safari/537.36",
@@ -77,7 +76,7 @@ def scrape_flipkart():
     return items
 
 # ---------- posting ----------
-def post_deals(items, src):
+async def post_deals(items, src):
     if not items:
         print(f"[{src}] no deals found")
         return
@@ -89,26 +88,11 @@ def post_deals(items, src):
                 f"💰 Price: ₹{it['price']}\n\n"
                 f"🔗 {it['link']}"
             )
-            asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text=msg, disable_web_page_preview=False))
+            await bot.send_message(chat_id=CHANNEL_ID, text=msg, disable_web_page_preview=False)
             print(f"[{src}] posted: {it['title'][:40]}")
-            time.sleep(2)
+            await asyncio.sleep(2)
         except Exception as e:
             print(f"[{src}] post error", e)
-
-# ---------- jobs ----------
-def job_amazon():
-    print(">> job_amazon fired")
-    post_deals(scrape_amazon(), "Amazon")
-
-def job_flipkart():
-    print(">> job_flipkart fired")
-    post_deals(scrape_flipkart(), "Flipkart")
-
-def watchdog():
-    """Logs every 60s so we know the scheduler thread is alive."""
-    while True:
-        print(f"[watchdog] alive {datetime.now().strftime('%H:%M:%S')}")
-        time.sleep(60)
 
 # ---------- Flask ----------
 app = Flask(__name__)
@@ -119,30 +103,39 @@ def home():
 
 @app.route("/status")
 def status():
-    return {"amazon_interval": AMZ_INTERVAL_MIN, "flipkart_interval": FK_INTERVAL_MIN}
+    return {
+        "last_amazon": LAST_AMZ,
+        "last_flipkart": LAST_FK,
+        "time": datetime.now().strftime("%H:%M:%S")
+    }
 
-# ---------- main ----------
-def start_scheduler():
-    sched = BackgroundScheduler()
-    sched.add_job(job_amazon, IntervalTrigger(minutes=AMZ_INTERVAL_MIN))
-    sched.add_job(job_flipkart, IntervalTrigger(minutes=FK_INTERVAL_MIN))
-    sched.start()
-    print("✅ Scheduler started")
-
-    # also start watchdog
-    threading.Thread(target=watchdog, daemon=True).start()
+# ---------- loop ----------
+async def loop_tasks():
+    global LAST_AMZ, LAST_FK
+    while True:
+        now = time.time()
+        if now - LAST_FK >= FK_INTERVAL:
+            print(">> Flipkart job fired")
+            await post_deals(scrape_flipkart(), "Flipkart")
+            LAST_FK = now
+        if now - LAST_AMZ >= AMZ_INTERVAL:
+            print(">> Amazon job fired")
+            await post_deals(scrape_amazon(), "Amazon")
+            LAST_AMZ = now
+        await asyncio.sleep(10)
 
 def main():
-    print("⚡ Bot starting in TEST MODE")
+    print("⚡ Bot starting in LOOP MODE")
     try:
-        asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text="✅ Bot in TEST MODE - expect spam deals"))
+        asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text="✅ Bot running in LOOP MODE - deals every 1 min"))
     except Exception as e:
         print("Startup send failed:", e)
 
-    # run scheduler in separate thread
-    threading.Thread(target=start_scheduler, daemon=True).start()
+    # start loop in background
+    loop = asyncio.get_event_loop()
+    loop.create_task(loop_tasks())
 
-    # run Flask
+    # run Flask forever (same loop)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=False, use_reloader=False)
 
 if __name__ == "__main__":
