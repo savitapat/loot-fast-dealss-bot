@@ -1,7 +1,7 @@
-# app.py – ULTRA FAST LOOT DEALS BOT (Midnight Edition)
-import os, re, time, random, sqlite3, asyncio
+# app.py – 24/7 ULTIMATE LOOT DEALS BOT
+import os, re, time, random, sqlite3, asyncio, json
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify
@@ -27,34 +27,41 @@ DB = "deals.db"
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     'Accept-Language': 'en-US,en;q=0.9',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Referer': 'https://www.google.com/'
 }
 
-# ULTRA AGGRESSIVE DEAL SOURCES (Like big channels)
-ULTRA_DEAL_SOURCES = [
-    # FLASH SALE PAGES (Midnight deals)
-    "https://www.amazon.in/deals?dealType=LIGHTNING_DEAL",
-    "https://www.amazon.in/gp/goldbox?dealType=lightning",
-    "https://www.flipkart.com/offers/flash-sales",
-    "https://www.flipkart.com/plus/member-only-deals",
+# ULTIMATE DEAL SOURCES (24/7 monitoring)
+ULTIMATE_DEAL_SOURCES = [
+    # REAL-TIME DEAL FEEDS
+    "https://www.amazon.in/deals?ref_=nav_cs_gb",
+    "https://www.flipkart.com/offers/deals-of-the-day",
     
-    # CLEARANCE & LIQUIDATION (Where loot deals are)
-    "https://www.amazon.in/b/?node=3404659031",  # Clearance Store
-    "https://www.amazon.in/b/?node=3404670031",  # Overstock Deals
+    # CATEGORY-SPECIFIC LOOT ZONES
+    "https://www.amazon.in/gp/bestsellers/electronics/ref=zg_bs_electronics_sm",
+    "https://www.flipkart.com/electronics/pr?sid=tyy%2C4io&p%5B%5D=facets.discount_range_v1%5B%5D=50%25+or+more",
+    
+    # UNDER ₹500 SECTION (Where real loot is)
+    "https://www.amazon.in/b/?node=3404659031",  # Clearance
     "https://www.flipkart.com/offers/clearance-store",
     
-    # PRICE DROP PAGES
-    "https://www.amazon.deals/price-drops",
-    "https://www.flipkart.com/offers/price-drop",
+    # FLASH SALE PAGES
+    "https://www.amazon.in/events?ref_=nav_cs_gb",
+    "https://www.flipkart.com/plus/member-only-deals",
     
-    # CATEGORY-SPECIFIC LOOT DEALS
+    # TRENDING DEALS (What other channels scrape)
     "https://www.amazon.in/b/?node=1389401031&filter=discount%3A70-",  # Electronics 70%+
-    "https://www.amazon.in/b/?node=1389402031&filter=discount%3A80-",  # Fashion 80%+
-    "https://www.flipkart.com/electronics/pr?sid=tyy%2C4io&filter=discount%3A60.",  # Electronics 60%+
-    "https://www.flipkart.com/clothing-and-accessories/pr?sid=clo&filter=discount%3A70.",  # Fashion 70%+
-    
-    # DAILY SUPER DEALS
-    "https://www.amazon.in/b/?node=26841786031",  # Today's Deals
-    "https://www.flipkart.com/offers-list/todays-special-deals",
+    "https://www.flipkart.com/offers-list/trending-deals",
+]
+
+# POPULAR PRODUCT CATEGORIES (That other channels target)
+POPULAR_CATEGORIES = [
+    "https://www.amazon.in/s?k=earbuds+under+500&rh=p_36%3A1318505031",
+    "https://www.amazon.in/s?k=power+bank+under+500",
+    "https://www.flipkart.com/search?q=earbuds+under+500&sort=popularity",
+    "https://www.flipkart.com/search?q=power+bank+under+1000",
+    "https://www.amazon.in/s?k=smartwatch+under+1000",
+    "https://www.flipkart.com/search?q=smartwatch+under+1500",
 ]
 
 # ---------------- DB INIT ----------------
@@ -66,24 +73,25 @@ def init_db():
             price INTEGER,
             discount INTEGER,
             title TEXT,
-            source TEXT
+            source TEXT,
+            category TEXT
         )""")
 
-def posted_recently(pid, hours=3):  # Only 3 hours cooldown for flash deals
+def posted_recently(pid, hours=2):  # Only 2 hours cooldown for frequent posting
     cutoff = int(time.time()) - hours * 3600
     with sqlite3.connect(DB) as c:
         row = c.execute("SELECT 1 FROM posts WHERE pid=? AND ts>=?", (pid, cutoff)).fetchone()
     return bool(row)
 
-def mark_posted(pid, price, discount, title, source):
+def mark_posted(pid, price, discount, title, source, category):
     with sqlite3.connect(DB) as c:
-        c.execute("INSERT OR REPLACE INTO posts VALUES (?,?,?,?,?,?)",
-                  (pid, int(time.time()), price, discount, title, source))
+        c.execute("INSERT OR REPLACE INTO posts VALUES (?,?,?,?,?,?,?)",
+                  (pid, int(time.time()), price, discount, title, source, category))
 
 # ---------------- HELPERS ----------------
 def fetch(url):
     try:
-        r = requests.get(url, headers=HEADERS, timeout=10)  # Faster timeout
+        r = requests.get(url, headers=HEADERS, timeout=15)
         return r.text if r.status_code == 200 else ""
     except Exception as e:
         return ""
@@ -121,129 +129,186 @@ def sync_send_message(message):
     except Exception as e:
         return False
 
-# ---------------- ULTRA AGGRESSIVE SCRAPERS ----------------
-def scrape_flash_deals():
+# ---------------- ULTIMATE SCRAPING ENGINE ----------------
+def scrape_amazon_aggressive():
     items = []
-    print("⚡ Scanning FLASH deals...")
+    print("🛒 Scanning Amazon AGGRESSIVELY...")
     
-    for url in ULTRA_DEAL_SOURCES:
+    for url in ULTIMATE_DEAL_SOURCES + POPULAR_CATEGORIES:
+        if "amazon" not in url: continue
+        
         html = fetch(url)
         if not html: continue
         
         soup = BeautifulSoup(html, "lxml")
         
-        # AGGRESSIVE SELECTORS (like big channels use)
-        aggressive_selectors = [
-            # Amazon flash deals
-            '[data-testid="deal-card"]',
-            '.lightningDeal',
-            '.a-box-group',
+        # AGGRESSIVE AMAZON SELECTORS
+        selectors = [
+            '[data-component-type="s-search-result"]',
             '.s-result-item',
-            '.deal-container',
-            
-            # Flipkart flash deals  
-            'a._1fQZEK',
-            'a._2UzuFa',
-            'a.CGtCQZ',
-            '.IIdQZO',
-            '._4ddWXP'
+            '.a-section',
+            '.deal-tile',
+            '[data-testid="deal-card"]'
         ]
         
-        for selector in aggressive_selectors:
-            for card in soup.select(selector)[:20]:  # Check more items
+        for selector in selectors:
+            for product in soup.select(selector)[:25]:  # Check more products
                 try:
-                    # AMAZON
-                    if "amazon" in url:
-                        link_elem = card.select_one('a[href*="/deal/"], a[href*="/dp/"], a[href*="/gp/"]')
-                        if not link_elem: continue
-                        
-                        link = urljoin("https://www.amazon.in", link_elem["href"])
-                        link = add_affiliate_tag(link.split('?')[0])
-                        
-                        title_elem = card.select_one('h2, .a-text-normal, [data-testid="deal-title"]')
-                        title = title_elem.get_text(strip=True)[:80] if title_elem else "Flash Deal"
-                        
-                        # PRICE - ULTRA AGGRESSIVE
-                        price = None
-                        price_selectors = ['.a-price-whole', '.a-price .a-offscreen', '.dealPrice', '.price']
-                        for ps in price_selectors:
-                            price_elem = card.select_one(ps)
-                            if price_elem:
-                                price = parse_price(price_elem.get_text())
-                                if price and price < 500: break  # ONLY CHEAP ITEMS
-                        
-                        if not price or price > 1000: continue  # MAX ₹1000 for loot deals
-                        
-                        # DISCOUNT - MUST BE HIGH
-                        discount = 0
-                        discount_selectors = ['.a-text-strike', '.a-text-price', '.savingsPercentage', '.discount']
-                        for ds in discount_selectors:
-                            discount_elem = card.select_one(ds)
-                            if discount_elem:
-                                discount_text = discount_elem.get_text()
-                                discount_match = re.search(r'(\d+)%', discount_text)
-                                if discount_match:
-                                    discount = int(discount_match.group(1))
-                                    if discount >= 60: break  # Only high discounts
-                        
-                        if discount < 60: continue  # MINIMUM 60% OFF
-                        
-                        pid = f"flash_amz_{hash(link)}"
-                        items.append((pid, "AMAZON FLASH", title, link, price, discount))
+                    # Find link
+                    link_elem = product.select_one('a[href*="/dp/"], a[href*="/gp/"], a[href*="/deal/"]')
+                    if not link_elem: continue
                     
-                    # FLIPKART
-                    elif "flipkart" in url:
-                        href = card.get("href")
-                        if not href: continue
-                        
-                        link = urljoin("https://www.flipkart.com", href.split('?')[0])
-                        
-                        title_elem = card.select_one('._4rR01T', '.s1Q9rs', '._2mylT6')
-                        title = title_elem.get_text(strip=True)[:80] if title_elem else "Flash Deal"
-                        
-                        # PRICE
-                        price_elem = card.select_one('._30jeq3', '._1_WHN1')
-                        price = parse_price(price_elem.get_text()) if price_elem else None
-                        if not price or price > 1000: continue
-                        
-                        # DISCOUNT
-                        discount = 0
-                        discount_elem = card.select_one('._3Ay6Sb', '._2ZdXDS', '.ICdJdP')
-                        if discount_elem:
-                            discount_text = discount_elem.get_text()
-                            discount_match = re.search(r'(\d+)%', discount_text)
-                            if discount_match:
-                                discount = int(discount_match.group(1))
-                        
-                        if discount < 60: continue
-                        
-                        pid = f"flash_fk_{hash(link)}"
-                        items.append((pid, "FLIPKART FLASH", title, link, price, discount))
+                    link = urljoin("https://www.amazon.in", link_elem["href"])
+                    link = add_affiliate_tag(link.split('?')[0])
+                    
+                    # Find title
+                    title_elem = product.select_one('.a-text-normal, h2, .a-size-base-plus')
+                    title = title_elem.get_text(strip=True)[:80] if title_elem else "Amazon Deal"
+                    
+                    # Find price - ULTRA AGGRESSIVE
+                    price = None
+                    price_selectors = ['.a-price-whole', '.a-price .a-offscreen', '.a-text-price']
+                    for ps in price_selectors:
+                        price_elems = product.select(ps)
+                        for elem in price_elems:
+                            price = parse_price(elem.get_text())
+                            if price and price <= 1000: break  # Only affordable items
+                        if price: break
+                    
+                    if not price or price > 1500: continue  # Max ₹1500 for loot deals
+                    
+                    # Find original price for discount
+                    original_price = None
+                    original_selectors = ['.a-text-strike', '.a-price.a-text-price']
+                    for ops in original_selectors:
+                        original_elem = product.select_one(ops)
+                        if original_elem:
+                            original_price = parse_price(original_elem.get_text())
+                            if original_price: break
+                    
+                    # Calculate discount
+                    discount = 0
+                    if original_price and original_price > price:
+                        discount = int(((original_price - price) / original_price) * 100)
+                    
+                    # Also check discount badges
+                    discount_elem = product.select_one('.savingsPercentage, .a-badge-text')
+                    if discount_elem and not discount:
+                        discount_text = discount_elem.get_text()
+                        discount_match = re.search(r'(\d+)%', discount_text)
+                        if discount_match:
+                            discount = int(discount_match.group(1))
+                    
+                    # ONLY POST GOOD DEALS
+                    if discount >= 50 or price <= 500:
+                        pid = f"amz_{hash(link)}"
+                        category = "Electronics" if "electronics" in url else "Fashion" if "fashion" in url else "Other"
+                        items.append((pid, "AMAZON", title, link, price, discount, category))
                         
                 except Exception:
                     continue
     
-    print(f"✅ Found {len(items)} FLASH deals")
+    print(f"✅ Found {len(items)} Amazon loot deals")
     return items
 
-def scrape_clearance_deals():
-    """Find clearance and liquidation deals (real loot deals)"""
+def scrape_flipkart_aggressive():
     items = []
-    print("🛒 Scanning CLEARANCE deals...")
+    print("📦 Scanning Flipkart AGGRESSIVELY...")
     
-    clearance_urls = [
-        "https://www.amazon.in/b/?node=3404659031",  # Clearance
-        "https://www.amazon.in/b/?node=3404670031",  # Overstock
-        "https://www.flipkart.com/offers/clearance-store"
-    ]
-    
-    for url in clearance_urls:
+    for url in ULTIMATE_DEAL_SOURCES + POPULAR_CATEGORIES:
+        if "flipkart" not in url: continue
+        
         html = fetch(url)
         if not html: continue
         
         soup = BeautifulSoup(html, "lxml")
         
-        products = soup.select('.s-result-item, ._1fQZEK, ._2UzuFa')[:25]
+        # AGGRESSIVE FLIPKART SELECTORS
+        selectors = [
+            'a._1fQZEK',
+            'a._2UzuFa',
+            'a.CGtCQZ',
+            'a._2rpwqI',
+            'div._4ddWXP'
+        ]
+        
+        for selector in selectors:
+            for product in soup.select(selector)[:25]:
+                try:
+                    # Find link
+                    href = product.get("href")
+                    if not href: continue
+                    
+                    link = urljoin("https://www.flipkart.com", href.split('?')[0])
+                    
+                    # Find title
+                    title_elem = product.select_one('._4rR01T, .s1Q9rs, ._2mylT6')
+                    title = title_elem.get_text(strip=True)[:80] if title_elem else "Flipkart Deal"
+                    
+                    # Find price
+                    price_elem = product.select_one('._30jeq3, ._1_WHN1')
+                    price = parse_price(price_elem.get_text()) if price_elem else None
+                    if not price or price > 1500: continue
+                    
+                    # Find original price
+                    original_elem = product.select_one('._3I9_wc, ._2p6lqe')
+                    original_price = parse_price(original_elem.get_text()) if original_elem else None
+                    
+                    # Calculate discount
+                    discount = 0
+                    if original_price and original_price > price:
+                        discount = int(((original_price - price) / original_price) * 100)
+                    
+                    # Check discount badge
+                    discount_elem = product.select_one('._3Ay6Sb, ._2ZdXDS')
+                    if discount_elem and not discount:
+                        discount_text = discount_elem.get_text()
+                        discount_match = re.search(r'(\d+)%', discount_text)
+                        if discount_match:
+                            discount = int(discount_match.group(1))
+                    
+                    # ONLY POST GOOD DEALS
+                    if discount >= 50 or price <= 500:
+                        pid = f"fk_{hash(link)}"
+                        category = "Electronics" if "electronics" in url else "Fashion" if "fashion" in url else "Other"
+                        items.append((pid, "FLIPKART", title, link, price, discount, category))
+                        
+                except Exception:
+                    continue
+    
+    print(f"✅ Found {len(items)} Flipkart loot deals")
+    return items
+
+def scrape_popular_products():
+    """Scrape specific popular products that other channels target"""
+    items = []
+    print("🎯 Scanning POPULAR products...")
+    
+    popular_products = [
+        # Power Banks
+        ("https://www.amazon.in/s?k=power+bank+under+1000", "Power Bank"),
+        ("https://www.flipkart.com/search?q=power+bank+under+1000", "Power Bank"),
+        
+        # Earbuds
+        ("https://www.amazon.in/s?k=earbuds+under+500", "Earbuds"),
+        ("https://www.flipkart.com/search?q=earbuds+under+500", "Earbuds"),
+        
+        # Smartwatches
+        ("https://www.amazon.in/s?k=smartwatch+under+1500", "Smartwatch"),
+        ("https://www.flipkart.com/search?q=smartwatch+under+1500", "Smartwatch"),
+        
+        # Trimmers
+        ("https://www.amazon.in/s?k=trimmer+under+500", "Trimmer"),
+        ("https://www.flipkart.com/search?q=trimmer+under+500", "Trimmer"),
+    ]
+    
+    for url, category in popular_products:
+        html = fetch(url)
+        if not html: continue
+        
+        soup = BeautifulSoup(html, "lxml")
+        
+        products = soup.select('.s-result-item, a._1fQZEK')[:15]
         for product in products:
             try:
                 if "amazon" in url:
@@ -254,14 +319,14 @@ def scrape_clearance_deals():
                     link = add_affiliate_tag(link.split('?')[0])
                     
                     title_elem = product.select_one('.a-text-normal')
-                    title = title_elem.get_text(strip=True)[:70] if title_elem else "Clearance Deal"
+                    title = title_elem.get_text(strip=True)[:70] if title_elem else f"{category} Deal"
                     
                     price_elem = product.select_one('.a-price-whole')
                     price = parse_price(price_elem.get_text()) if price_elem else None
-                    if not price or price > 500: continue  # MAX ₹500 for clearance
+                    if not price: continue
                     
-                    pid = f"clearance_{hash(link)}"
-                    items.append((pid, "CLEARANCE", title, link, price, 70))  # Assume 70% off
+                    pid = f"pop_{hash(link)}"
+                    items.append((pid, "AMAZON", title, link, price, 0, category))
                 
                 elif "flipkart" in url:
                     href = product.get("href")
@@ -269,125 +334,110 @@ def scrape_clearance_deals():
                     
                     link = urljoin("https://www.flipkart.com", href.split('?')[0])
                     
-                    title_elem = product.select_one('._4rR01T', '.s1Q9rs')
-                    title = title_elem.get_text(strip=True)[:70] if title_elem else "Clearance Deal"
+                    title_elem = product.select_one('._4rR01T, .s1Q9rs')
+                    title = title_elem.get_text(strip=True)[:70] if title_elem else f"{category} Deal"
                     
                     price_elem = product.select_one('._30jeq3')
                     price = parse_price(price_elem.get_text()) if price_elem else None
-                    if not price or price > 500: continue
+                    if not price: continue
                     
-                    pid = f"clearance_{hash(link)}"
-                    items.append((pid, "CLEARANCE", title, link, price, 70))
+                    pid = f"pop_{hash(link)}"
+                    items.append((pid, "FLIPKART", title, link, price, 0, category))
                     
             except Exception:
                 continue
     
-    print(f"✅ Found {len(items)} CLEARANCE deals")
+    print(f"✅ Found {len(items)} popular product deals")
     return items
 
 # ---------------- POSTING ----------------
-def compose_ultra_message(item):
-    pid, platform, title, link, price, discount = item
+def compose_ultimate_message(item):
+    pid, platform, title, link, price, discount, category = item
     
     # URGENT MESSAGES LIKE BIG CHANNELS
-    if discount >= 80:
+    if price <= 300:
         emoji = "🚀💥"
         urgency = "SUPER LOOT"
     elif discount >= 70:
-        emoji = "⚡🔥" 
+        emoji = "⚡🔥"
+        urgency = "MEGA DEAL"
+    elif discount >= 50:
+        emoji = "🔥"
         urgency = "HOT DEAL"
     else:
-        emoji = "🔥"
-        urgency = "FLASH SALE"
+        emoji = "🎯"
+        urgency = "GREAT DEAL"
     
     message = f"{emoji} <b>{urgency} - {platform}</b>\n\n"
     message += f"🏷️ {title}\n\n"
     message += f"💰 Price: <b>₹{price}</b>\n"
-    message += f"🎯 Discount: <b>{discount}% OFF</b>\n\n"
+    
+    if discount > 0:
+        message += f"🎯 Discount: <b>{discount}% OFF</b>\n\n"
+    
     message += f"🔗 {link}\n\n"
     message += f"⏰ <b>GRAB BEFORE STOCK ENDS!</b>\n"
     message += f"📦 <b>Cash on Delivery Available</b>"
     
     return message
 
-def post_ultra_deals():
-    print("🚀 Scanning for ULTRA deals...")
+def post_ultimate_deals():
+    print("🚀 Scanning for ULTIMATE deals...")
     
-    flash_deals = scrape_flash_deals()
-    clearance_deals = scrape_clearance_deals()
+    # SCRAPE ALL SOURCES SIMULTANEOUSLY
+    amazon_deals = scrape_amazon_aggressive()
+    flipkart_deals = scrape_flipkart_aggressive()
+    popular_deals = scrape_popular_products()
     
-    all_deals = flash_deals + clearance_deals
+    all_deals = amazon_deals + flipkart_deals + popular_deals
     
-    # Sort by price (lowest first) for real loot deals
-    all_deals.sort(key=lambda x: x[4])
+    # Sort by price (lowest first) and discount (highest first)
+    all_deals.sort(key=lambda x: (x[4], -x[5]))
     
     posted_count = 0
     for deal in all_deals:
-        pid, platform, title, link, price, discount = deal
+        pid, platform, title, link, price, discount, category = deal
         
         if posted_recently(pid):
             continue
             
-        message = compose_ultra_message(deal)
+        message = compose_ultimate_message(deal)
         if sync_send_message(message):
-            mark_posted(pid, price, discount, title, platform)
-            print(f"📢 Posted ULTRA: ₹{price} - {title[:40]}...")
+            mark_posted(pid, price, discount, title, platform, category)
+            print(f"📢 Posted: ₹{price} - {title[:40]}...")
             posted_count += 1
-            time.sleep(1)  # VERY FAST POSTING
+            time.sleep(1)  # FAST POSTING
     
     return posted_count, all_deals
 
 # ---------------- MAIN LOOP ----------------
 last_post = {"text": None, "time": None, "count": 0}
 
-def ultra_deal_loop():
+def ultimate_deal_loop():
     global last_post
     while True:
         try:
-            current_hour = datetime.now().hour
-            current_minute = datetime.now().minute
+            # ALWAYS AGGRESSIVE - 24/7
+            print("🌐 24/7 AGGRESSIVE scanning...")
+            posted_count, all_deals = post_ultimate_deals()
             
-            # ULTRA AGGRESSIVE during peak hours (10PM - 2AM)
-            if 22 <= current_hour <= 23 or 0 <= current_hour <= 2:
-                print("🌙 NIGHT MODE: Ultra aggressive scanning...")
-                posted_count, all_deals = post_ultra_deals()
-                
-                if posted_count > 0:
-                    last_post = {
-                        "text": f"🌙 Posted {posted_count} NIGHT deals",
-                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "count": posted_count
-                    }
-                    print(f"✅ Posted {posted_count} night deals")
-                else:
-                    last_post = {
-                        "text": "No night deals found",
-                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "count": 0
-                    }
-                    
-                wait_time = 180  # 3 minutes during night
-                
+            if posted_count > 0:
+                last_post = {
+                    "text": f"Posted {posted_count} new loot deals",
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "count": posted_count
+                }
+                print(f"✅ Posted {posted_count} loot deals")
             else:
-                # Normal mode during day
-                print("☀️ DAY MODE: Normal scanning...")
-                posted_count, all_deals = post_ultra_deals()
-                
-                if posted_count > 0:
-                    last_post = {
-                        "text": f"Posted {posted_count} deals",
-                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "count": posted_count
-                    }
-                else:
-                    last_post = {
-                        "text": "No deals found",
-                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "count": 0
-                    }
-                    
-                wait_time = 300  # 5 minutes during day
+                last_post = {
+                    "text": "No new loot deals found",
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "count": 0
+                }
+                print("⚠️  No loot deals this cycle")
             
+            # ULTRA FAST: 3 minutes always
+            wait_time = 180  # 3 minutes
             print(f"⏰ Next scan in {wait_time} seconds...")
             time.sleep(wait_time)
             
@@ -398,15 +448,15 @@ def ultra_deal_loop():
 # ---------------- FLASK ROUTES ----------------
 @app.route("/")
 def home():
-    return "ULTRA LOOT DEALS BOT ✅ Running (Night Mode Active)"
+    return "24/7 ULTIMATE LOOT DEALS BOT ✅ Running"
 
 @app.route("/status")
 def status():
     return jsonify(last_post)
 
-@app.route("/ultra-scan")
-def ultra_scan():
-    posted_count, all_deals = post_ultra_deals()
+@app.route("/force-scan")
+def force_scan():
+    posted_count, all_deals = post_ultimate_deals()
     return jsonify({
         "posted": posted_count,
         "found": len(all_deals),
@@ -415,27 +465,27 @@ def ultra_scan():
 
 # ---------------- MAIN ----------------
 def main():
-    print("🤖 Starting ULTRA LOOT DEALS BOT")
+    print("🤖 Starting 24/7 ULTIMATE LOOT DEALS BOT")
     print(f"Channel: {CHANNEL_ID}")
-    print("🌙 Night Mode: 10PM - 2AM (3-minute scans)")
-    print("☀️ Day Mode: 5-minute scans")
+    print("🌐 24/7 Mode: 3-minute scans ALWAYS")
+    print("🎯 Targeting: Power Banks, Earbuds, Smartwatches, Trimmers")
     
     init_db()
     
     # Aggressive startup message
-    startup_msg = "🚀 <b>ULTRA LOOT DEALS BOT ACTIVATED!</b>\n\n"
-    startup_msg += "⚡ Scanning for 60-80% OFF deals\n"
-    startup_msg += "🌙 Night Mode: 10PM-2AM (3-minute scans)\n"
-    startup_msg += "☀️ Day Mode: 5-minute scans\n\n"
-    startup_msg += "Get ready for AMAZING LOOTS! 🔥"
+    startup_msg = "🚀 <b>24/7 ULTIMATE LOOT DEALS BOT ACTIVATED!</b>\n\n"
+    startup_msg += "⚡ Scanning every 3 minutes 24/7\n"
+    startup_msg += "🎯 Targeting: Power Banks, Earbuds, Smartwatches\n"
+    startup_msg += "💰 Max price: ₹1500 | Min discount: 50%\n\n"
+    startup_msg += "Get ready for NON-STOP LOOTS! 🔥"
     
     if sync_send_message(startup_msg):
         print("✅ Startup message sent")
     
-    # Start ULTRA aggressive thread
-    t = Thread(target=ultra_deal_loop, daemon=True)
+    # Start ULTIMATE aggressive thread
+    t = Thread(target=ultimate_deal_loop, daemon=True)
     t.start()
-    print("✅ Ultra aggressive scanner started")
+    print("✅ 24/7 aggressive scanner started")
     
     # Start Flask
     port = int(os.environ.get("PORT", 10000))
