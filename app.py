@@ -1,142 +1,139 @@
-# app.py
-import os, re, time, random, asyncio
-from urllib.parse import urljoin
-from datetime import datetime
-
+import os
+import time
+import threading
+import asyncio
+import logging
 import requests
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
-from telegram.ext import Application
 from flask import Flask
+from dotenv import load_dotenv
+from telegram import Bot
 
-# ---------- config ----------
-load_dotenv(override=True)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# -------------------------------------------------
+# Setup
+# -------------------------------------------------
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-application = Application.builder().token(TELEGRAM_TOKEN).build()
-bot = application.bot
+if not TOKEN or not CHANNEL_ID:
+    raise ValueError("❌ BOT_TOKEN or CHANNEL_ID not set in environment!")
 
-# intervals (seconds for test)
-AMZ_INTERVAL = 120   # 2 min
-FK_INTERVAL = 60     # 1 min
-LAST_AMZ, LAST_FK = 0, 0
+bot = Bot(token=TOKEN)
 
-HEADERS_POOL = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) Firefox/125.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15"
-]
+# Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# ---------- helpers ----------
-def fetch_url(url):
-    try:
-        r = requests.get(url, headers={"User-Agent": random.choice(HEADERS_POOL)}, timeout=15)
-        r.raise_for_status()
-        return r.text
-    except Exception as e:
-        print("[fetch error]", url, e)
-        return None
-
-def parse_price(txt):
-    clean = re.sub(r"[^\d]", "", txt or "")
-    return int(clean) if clean else 0
-
-# ---------- scrapers ----------
-def scrape_amazon():
-    url = "https://www.amazon.in/gp/goldbox"
-    html = fetch_url(url)
-    if not html: return []
-    soup = BeautifulSoup(html, "lxml")
-    items = []
-    for a in soup.select("a[href*='/dp/']"):
-        link = urljoin(url, a["href"].split("?")[0])
-        title = a.get_text(strip=True)[:120]
-        block = a.find_parent().get_text(" ", strip=True) if a.find_parent() else ""
-        price = parse_price(block)
-        if title and price:
-            items.append({"title": title, "link": link, "price": price, "source": "Amazon"})
-    print(f"[Amazon] scraped {len(items)} items")
-    return items
-
-def scrape_flipkart():
-    url = "https://www.flipkart.com/offers"
-    html = fetch_url(url)
-    if not html: return []
-    soup = BeautifulSoup(html, "lxml")
-    items = []
-    for a in soup.select("a[href*='/p/']"):
-        link = urljoin(url, a["href"].split("?")[0])
-        title = a.get_text(strip=True)[:120]
-        block = a.find_parent().get_text(" ", strip=True) if a.find_parent() else ""
-        price = parse_price(block)
-        if title and price:
-            items.append({"title": title, "link": link, "price": price, "source": "Flipkart"})
-    print(f"[Flipkart] scraped {len(items)} items")
-    return items
-
-# ---------- posting ----------
-async def post_deals(items, src):
-    if not items:
-        print(f"[{src}] no deals found")
-        return
-    for it in items[:2]:
-        try:
-            msg = (
-                f"🧪 TEST DEAL\n\n"
-                f"{it['source']} · {it['title']}\n"
-                f"💰 Price: ₹{it['price']}\n\n"
-                f"🔗 {it['link']}"
-            )
-            await bot.send_message(chat_id=CHANNEL_ID, text=msg, disable_web_page_preview=False)
-            print(f"[{src}] posted: {it['title'][:40]}")
-            await asyncio.sleep(2)
-        except Exception as e:
-            print(f"[{src}] post error", e)
-
-# ---------- Flask ----------
+# Flask app
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot running ✅"
+    return "Loot Fast Deals Bot is running ✅"
+
+@app.route("/health")
+def health():
+    return {"status": "ok"}
 
 @app.route("/status")
 def status():
-    return {
-        "last_amazon": LAST_AMZ,
-        "last_flipkart": LAST_FK,
-        "time": datetime.now().strftime("%H:%M:%S")
-    }
+    return {"last_post": LAST_POST_TIME, "last_source": LAST_SOURCE}
 
-# ---------- loop ----------
-async def loop_tasks():
-    global LAST_AMZ, LAST_FK
-    while True:
-        now = time.time()
-        if now - LAST_FK >= FK_INTERVAL:
-            print(">> Flipkart job fired")
-            await post_deals(scrape_flipkart(), "Flipkart")
-            LAST_FK = now
-        if now - LAST_AMZ >= AMZ_INTERVAL:
-            print(">> Amazon job fired")
-            await post_deals(scrape_amazon(), "Amazon")
-            LAST_AMZ = now
-        await asyncio.sleep(10)
 
-def main():
-    print("⚡ Bot starting in LOOP MODE")
+# -------------------------------------------------
+# Globals
+# -------------------------------------------------
+FK_INTERVAL_MIN = 1   # super quick testing
+AMZ_INTERVAL_MIN = 1  # super quick testing
+TEST_MODE = True      # flip to False for real deals
+
+LAST_POST_TIME = "never"
+LAST_SOURCE = "none"
+
+
+# -------------------------------------------------
+# Scrapers
+# -------------------------------------------------
+def scrape_flipkart():
+    url = "https://www.flipkart.com/search?q=deals"
+    logging.info("🔎 Scraping Flipkart...")
     try:
-        asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text="✅ Bot running in LOOP MODE - deals every 1 min"))
+        r = requests.get(url, timeout=10)
+        soup = BeautifulSoup(r.text, "lxml")
+        items = [a.text.strip() for a in soup.select("a.s1Q9rs")]
+        return items[:3] if items else []
     except Exception as e:
-        print("Startup send failed:", e)
+        logging.error(f"Flipkart scrape error: {e}")
+        return []
 
-    # start loop in background
-    loop = asyncio.get_event_loop()
-    loop.create_task(loop_tasks())
 
-    # run Flask forever (same loop)
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=False, use_reloader=False)
+def scrape_amazon():
+    url = "https://www.amazon.in/s?k=deals"
+    logging.info("🔎 Scraping Amazon...")
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "lxml")
+        items = [a.text.strip() for a in soup.select("span.a-text-normal")]
+        return items[:3] if items else []
+    except Exception as e:
+        logging.error(f"Amazon scrape error: {e}")
+        return []
+
+
+# -------------------------------------------------
+# Deal Loop (Background Thread)
+# -------------------------------------------------
+def deal_loop():
+    global LAST_POST_TIME, LAST_SOURCE
+    logging.info("✅ Background deal loop started")
+
+    while True:
+        try:
+            # Flipkart
+            deals = scrape_flipkart()
+            if deals:
+                msg = "🔥 Flipkart Deals:\n" + "\n".join(deals)
+                asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text=msg))
+                LAST_POST_TIME = time.strftime("%Y-%m-%d %H:%M:%S")
+                LAST_SOURCE = "flipkart"
+                logging.info(f"📨 Posted {len(deals)} Flipkart deals")
+
+            # Amazon
+            deals = scrape_amazon()
+            if deals:
+                msg = "🛒 Amazon Deals:\n" + "\n".join(deals)
+                asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text=msg))
+                LAST_POST_TIME = time.strftime("%Y-%m-%d %H:%M:%S")
+                LAST_SOURCE = "amazon"
+                logging.info(f"📨 Posted {len(deals)} Amazon deals")
+
+        except Exception as e:
+            logging.error(f"❌ Error in deal loop: {e}")
+
+        # Sleep between cycles
+        time.sleep(60)  # every 1 min for testing
+
+
+# -------------------------------------------------
+# Main
+# -------------------------------------------------
+def main():
+    logging.info("⚡ Bot starting in THREAD MODE")
+    try:
+        asyncio.run(bot.send_message(chat_id=CHANNEL_ID,
+                                     text="✅ Bot running in THREAD MODE - expect frequent deals"))
+    except Exception as e:
+        logging.error(f"❌ Startup message failed: {e}")
+
+    # start background thread
+    t = threading.Thread(target=deal_loop, daemon=True)
+    t.start()
+
+    # run Flask (foreground)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)),
+            debug=False, use_reloader=False)
+
 
 if __name__ == "__main__":
     main()
