@@ -27,10 +27,17 @@ FAKE_DEALS = [
     "🎉 Loot Offer – Smartwatch ₹499 (Testing)",
 ]
 
+# Track last posted deal for /status
+last_deal = {"text": None, "time": None}
+
 # ---------------- Flask routes ----------------
 @app.route("/")
 def home():
     return "✅ Loot Fast Deals Bot is running (Fake Deals Mode)"
+
+@app.route("/status")
+def status():
+    return last_deal if last_deal["text"] else {"status": "no deals yet"}
 
 @app.route("/health")
 def health():
@@ -48,11 +55,11 @@ def deal_loop():
             print("📢 Posting deal:", deal)
 
             loop.run_until_complete(
-                bot.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=deal
-                )
+                bot.send_message(chat_id=CHANNEL_ID, text=deal)
             )
+
+            last_deal["text"] = deal
+            last_deal["time"] = time.strftime("%Y-%m-%d %H:%M:%S")
         except Exception as e:
             print("❌ Loop error:", e)
 
