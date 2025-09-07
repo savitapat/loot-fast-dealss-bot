@@ -6,11 +6,14 @@ from flask import Flask
 from telegram import Bot
 
 # ---------------- Config ----------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")   # 👈 fixed
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
+print("BOT_TOKEN from env =", BOT_TOKEN)
+print("CHANNEL_ID from env =", CHANNEL_ID)
+
 if not BOT_TOKEN or not CHANNEL_ID:
-    raise ValueError("❌ BOT_TOKEN or CHANNEL_ID not set in environment!")
+    raise ValueError("❌ TELEGRAM_TOKEN or CHANNEL_ID not set in environment!")
 
 bot = Bot(token=BOT_TOKEN)
 app = Flask(__name__)
