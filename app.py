@@ -7,6 +7,7 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 from telegram.ext import Application
 from flask import Flask
 
@@ -18,8 +19,9 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 bot = application.bot
 
-AMZ_INTERVAL_MIN = 2   # test quick
-FK_INTERVAL_MIN = 3
+# fast testing
+AMZ_INTERVAL_MIN = 2
+FK_INTERVAL_MIN = 1
 
 HEADERS_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0 Safari/537.36",
@@ -79,7 +81,7 @@ def post_deals(items, src):
     if not items:
         print(f"[{src}] no deals found")
         return
-    for it in items[:2]:  # only 2 each run
+    for it in items[:2]:
         try:
             msg = (
                 f"🧪 TEST DEAL\n\n"
@@ -102,6 +104,12 @@ def job_flipkart():
     print(">> job_flipkart fired")
     post_deals(scrape_flipkart(), "Flipkart")
 
+def watchdog():
+    """Logs every 60s so we know the scheduler thread is alive."""
+    while True:
+        print(f"[watchdog] alive {datetime.now().strftime('%H:%M:%S')}")
+        time.sleep(60)
+
 # ---------- Flask ----------
 app = Flask(__name__)
 
@@ -116,10 +124,13 @@ def status():
 # ---------- main ----------
 def start_scheduler():
     sched = BackgroundScheduler()
-    sched.add_job(job_amazon, "interval", minutes=AMZ_INTERVAL_MIN)
-    sched.add_job(job_flipkart, "interval", minutes=FK_INTERVAL_MIN)
+    sched.add_job(job_amazon, IntervalTrigger(minutes=AMZ_INTERVAL_MIN))
+    sched.add_job(job_flipkart, IntervalTrigger(minutes=FK_INTERVAL_MIN))
     sched.start()
     print("✅ Scheduler started")
+
+    # also start watchdog
+    threading.Thread(target=watchdog, daemon=True).start()
 
 def main():
     print("⚡ Bot starting in TEST MODE")
