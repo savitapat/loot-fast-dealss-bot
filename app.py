@@ -226,7 +226,7 @@ def debug_scraping():
     
     print(f"\nTotal Amazon: {len(amazon_items)}")
     print(f"Total Flipkart: {len(flipkart_items)}")
-    print("=== DEBUG END ==="")
+    print("=== DEBUG END ===")
     
     return len(amazon_items) + len(flipkart_items)
 
