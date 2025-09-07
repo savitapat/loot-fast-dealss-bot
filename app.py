@@ -44,28 +44,30 @@ def health():
     return {"status": "ok"}
 
 # ---------------- Deal Loop ----------------
-def deal_loop(loop):
-    print("✅ Background deal loop started")
-    asyncio.set_event_loop(loop)
+async def send_fake_deal():
+    """Async function that posts one fake deal to Telegram."""
+    deal = random.choice(FAKE_DEALS)
+    print("📢 Posting deal:", deal)
+    await bot.send_message(chat_id=CHANNEL_ID, text=deal)
 
+    last_deal["text"] = deal
+    last_deal["time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+async def deal_loop():
+    """Keeps running forever inside asyncio loop."""
     while True:
         try:
-            deal = random.choice(FAKE_DEALS)
-            print("📢 Posting deal:", deal)
-
-            # Schedule send into the loop
-            fut = asyncio.run_coroutine_threadsafe(
-                bot.send_message(chat_id=CHANNEL_ID, text=deal),
-                loop
-            )
-            fut.result()  # wait for send to complete
-
-            last_deal["text"] = deal
-            last_deal["time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            await send_fake_deal()
         except Exception as e:
             print("❌ Loop error:", e)
+        await asyncio.sleep(60)  # every 1 min
 
-        time.sleep(60)  # every 1 min
+def start_background_loop():
+    """Runs the async loop in a thread."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.create_task(deal_loop())
+    loop.run_forever()
 
 # ---------------- Main ----------------
 def main():
@@ -82,11 +84,8 @@ def main():
     except Exception as e:
         print("❌ Startup send failed:", e)
 
-    # Create one event loop for the thread
-    loop = asyncio.new_event_loop()
-
-    # Start background loop thread
-    t = threading.Thread(target=deal_loop, args=(loop,), daemon=True)
+    # Start async loop in background thread
+    t = threading.Thread(target=start_background_loop, daemon=True)
     t.start()
 
     # Run Flask
