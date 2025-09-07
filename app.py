@@ -44,9 +44,8 @@ def health():
     return {"status": "ok"}
 
 # ---------------- Deal Loop ----------------
-def deal_loop():
+def deal_loop(loop):
     print("✅ Background deal loop started")
-    loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     while True:
@@ -54,9 +53,12 @@ def deal_loop():
             deal = random.choice(FAKE_DEALS)
             print("📢 Posting deal:", deal)
 
-            loop.run_until_complete(
-                bot.send_message(chat_id=CHANNEL_ID, text=deal)
+            # Schedule send into the loop
+            fut = asyncio.run_coroutine_threadsafe(
+                bot.send_message(chat_id=CHANNEL_ID, text=deal),
+                loop
             )
+            fut.result()  # wait for send to complete
 
             last_deal["text"] = deal
             last_deal["time"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -80,8 +82,11 @@ def main():
     except Exception as e:
         print("❌ Startup send failed:", e)
 
+    # Create one event loop for the thread
+    loop = asyncio.new_event_loop()
+
     # Start background loop thread
-    t = threading.Thread(target=deal_loop, daemon=True)
+    t = threading.Thread(target=deal_loop, args=(loop,), daemon=True)
     t.start()
 
     # Run Flask
