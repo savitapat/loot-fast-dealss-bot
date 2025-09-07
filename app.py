@@ -1,6 +1,6 @@
-# app.py – Loot Fast Dealss Bot (Modified for Debug + Dummy Fallback)
+# app.py – Loot Fast Dealss Bot (Fixed for PTB v20 async -> sync)
 
-import os, re, time, random, sqlite3
+import os, re, time, random, sqlite3, asyncio
 from datetime import datetime
 from urllib.parse import urljoin
 
@@ -76,6 +76,14 @@ def parse_price(text):
     text = re.sub(r"[^\d]", "", text)
     return int(text) if text.isdigit() else None
 
+# ---------------- TELEGRAM WRAPPER ----------------
+def send_sync_message(chat_id, text, **kwargs):
+    try:
+        asyncio.run(bot.send_message(chat_id=chat_id, text=text, **kwargs))
+        print(f"📨 Sent to Telegram: {text[:50]}")
+    except Exception as e:
+        print(f"❌ Telegram post error: {e}")
+
 # ---------------- SCRAPERS ----------------
 def scrape_amazon():
     items = []
@@ -127,13 +135,9 @@ def process_and_post(items):
     for pid, src, title, link, price in items:
         if posted_recently(pid, price): continue
         msg = compose((pid, src, title, link, price))
-        try:
-            bot.send_message(chat_id=CHANNEL_ID, text=msg, disable_web_page_preview=False)
-            mark_posted(pid, price)
-            print(f"📢 Posted: {title[:50]}")
-            time.sleep(1.5)
-        except Exception as e:
-            print(f"❌ Telegram post error: {e}")
+        send_sync_message(CHANNEL_ID, msg, disable_web_page_preview=False)
+        mark_posted(pid, price)
+        time.sleep(1.5)
 
 # ---------------- LOOP ----------------
 last_post = {"text": None, "time": None}
@@ -143,7 +147,6 @@ def deal_loop():
     while True:
         try:
             if TEST_MODE:
-                # old fake test mode
                 samples = [
                     "🔥 Sample Deal – iPhone 15 Pro only ₹9999 (Testing)",
                     "💥 Flash Sale – 80% OFF on Headphones (Testing)",
@@ -151,9 +154,8 @@ def deal_loop():
                     "🎉 Loot Offer – Smartwatch ₹499 (Testing)"
                 ]
                 msg = random.choice(samples)
-                bot.send_message(chat_id=CHANNEL_ID, text=msg)
+                send_sync_message(CHANNEL_ID, msg)
                 last_post = {"text": msg, "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                print("📢 Posted FAKE deal")
             else:
                 amz = scrape_amazon()
                 fk = scrape_flipkart()
@@ -162,11 +164,9 @@ def deal_loop():
                     process_and_post(all_items)
                     last_post = {"text": all_items[0][2], "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
                 else:
-                    # 👇 Dummy fallback if nothing scraped
                     dummy_msg = f"⚠️ No deals scraped at {datetime.now().strftime('%H:%M:%S')}, dummy real deal message."
-                    bot.send_message(chat_id=CHANNEL_ID, text=dummy_msg)
+                    send_sync_message(CHANNEL_ID, dummy_msg)
                     last_post = {"text": dummy_msg, "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                    print("⚠️ Posted dummy deal instead (scraping empty)")
             time.sleep(60)
         except Exception as e:
             print(f"❌ Loop error: {e}")
@@ -188,11 +188,7 @@ def main():
     print("⚡ Bot starting in THREAD MODE (Fake Deals)" if TEST_MODE else "⚡ Bot starting in THREAD MODE (REAL Scraping)")
 
     init_db()
-    try:
-        bot.send_message(chat_id=CHANNEL_ID, text="✅ Bot deployed and running!")
-        print("✅ Startup message sent")
-    except Exception as e:
-        print(f"❌ Failed to send startup message: {e}")
+    send_sync_message(CHANNEL_ID, "✅ Bot deployed and running!")
 
     t = Thread(target=deal_loop, daemon=True)
     t.start()
