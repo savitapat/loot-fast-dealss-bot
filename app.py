@@ -1,6 +1,4 @@
 # app.py
-# Fixed so APScheduler + Flask both run
-
 import os, re, time, random, asyncio, threading
 from urllib.parse import urljoin
 from dotenv import load_dotenv
@@ -20,12 +18,12 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 bot = application.bot
 
-AMZ_INTERVAL_MIN = 2   # low for testing
+AMZ_INTERVAL_MIN = 2   # test quick
 FK_INTERVAL_MIN = 3
 
 HEADERS_POOL = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) Firefox/125.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15"
 ]
 
@@ -57,7 +55,7 @@ def scrape_amazon():
         price = parse_price(block)
         if title and price:
             items.append({"title": title, "link": link, "price": price, "source": "Amazon"})
-    print(f"Amazon scraped {len(items)} items")
+    print(f"[Amazon] scraped {len(items)} items")
     return items
 
 def scrape_flipkart():
@@ -73,15 +71,15 @@ def scrape_flipkart():
         price = parse_price(block)
         if title and price:
             items.append({"title": title, "link": link, "price": price, "source": "Flipkart"})
-    print(f"Flipkart scraped {len(items)} items")
+    print(f"[Flipkart] scraped {len(items)} items")
     return items
 
 # ---------- posting ----------
-def post_deals(items):
+def post_deals(items, src):
     if not items:
-        print("No deals found")
+        print(f"[{src}] no deals found")
         return
-    for it in items[:3]:  # limit to 3 for testing
+    for it in items[:2]:  # only 2 each run
         try:
             msg = (
                 f"🧪 TEST DEAL\n\n"
@@ -90,46 +88,51 @@ def post_deals(items):
                 f"🔗 {it['link']}"
             )
             asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text=msg, disable_web_page_preview=False))
-            print("Posted:", it["title"])
+            print(f"[{src}] posted: {it['title'][:40]}")
             time.sleep(2)
         except Exception as e:
-            print("[post error]", e)
+            print(f"[{src}] post error", e)
 
 # ---------- jobs ----------
 def job_amazon():
-    post_deals(scrape_amazon())
+    print(">> job_amazon fired")
+    post_deals(scrape_amazon(), "Amazon")
 
 def job_flipkart():
-    post_deals(scrape_flipkart())
+    print(">> job_flipkart fired")
+    post_deals(scrape_flipkart(), "Flipkart")
 
 # ---------- Flask ----------
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot running in TEST MODE ✅"
+    return "Bot running ✅"
 
 @app.route("/status")
 def status():
-    return {"mode": "test", "amazon_interval": AMZ_INTERVAL_MIN, "flipkart_interval": FK_INTERVAL_MIN}
+    return {"amazon_interval": AMZ_INTERVAL_MIN, "flipkart_interval": FK_INTERVAL_MIN}
 
 # ---------- main ----------
-def main():
-    print("⚡ Bot starting in TEST MODE")
-    asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text="✅ Bot in TEST MODE - expect spam deals"))
-
-    # Start scheduler
+def start_scheduler():
     sched = BackgroundScheduler()
     sched.add_job(job_amazon, "interval", minutes=AMZ_INTERVAL_MIN)
     sched.add_job(job_flipkart, "interval", minutes=FK_INTERVAL_MIN)
     sched.start()
+    print("✅ Scheduler started")
 
-    # Run Flask in separate thread
-    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=False, use_reloader=False)).start()
+def main():
+    print("⚡ Bot starting in TEST MODE")
+    try:
+        asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text="✅ Bot in TEST MODE - expect spam deals"))
+    except Exception as e:
+        print("Startup send failed:", e)
 
-    # Keep alive
-    while True:
-        time.sleep(60)
+    # run scheduler in separate thread
+    threading.Thread(target=start_scheduler, daemon=True).start()
+
+    # run Flask
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=False, use_reloader=False)
 
 if __name__ == "__main__":
     main()
