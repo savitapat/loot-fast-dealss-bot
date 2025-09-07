@@ -1,4 +1,5 @@
-# app.py – Loot Fast Dealss Bot
+# app.py – Loot Fast Dealss Bot (Modified for Debug + Dummy Fallback)
+
 import os, re, time, random, sqlite3
 from datetime import datetime
 from urllib.parse import urljoin
@@ -62,6 +63,7 @@ def mark_posted(pid, price):
 def fetch(url):
     try:
         r = requests.get(url, headers={"User-Agent": random.choice(HEADERS)}, timeout=20)
+        print(f"Fetched {url} status={r.status_code} length={len(r.text)}")
         if r.status_code == 200:
             return r.text
     except Exception as e:
@@ -91,7 +93,7 @@ def scrape_amazon():
             if not price: continue
             pid = f"amz_{hash(link)}"
             items.append((pid, "Amazon", title, link, price))
-    print(f"✅ Scraped {len(items)} Amazon items")
+    print(f"✅ Scraped {len(items)} Amazon items from {url}")
     return items
 
 def scrape_flipkart():
@@ -113,7 +115,7 @@ def scrape_flipkart():
             if not price: continue
             pid = f"fk_{hash(link)}"
             items.append((pid, "Flipkart", title, link, price))
-    print(f"✅ Scraped {len(items)} Flipkart items")
+    print(f"✅ Scraped {len(items)} Flipkart items from {url}")
     return items
 
 # ---------------- POSTING ----------------
@@ -141,6 +143,7 @@ def deal_loop():
     while True:
         try:
             if TEST_MODE:
+                # old fake test mode
                 samples = [
                     "🔥 Sample Deal – iPhone 15 Pro only ₹9999 (Testing)",
                     "💥 Flash Sale – 80% OFF on Headphones (Testing)",
@@ -155,10 +158,16 @@ def deal_loop():
                 amz = scrape_amazon()
                 fk = scrape_flipkart()
                 all_items = amz + fk
-                process_and_post(all_items)
                 if all_items:
+                    process_and_post(all_items)
                     last_post = {"text": all_items[0][2], "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-            time.sleep(60)  # every 1 min for testing
+                else:
+                    # 👇 Dummy fallback if nothing scraped
+                    dummy_msg = f"⚠️ No deals scraped at {datetime.now().strftime('%H:%M:%S')}, dummy real deal message."
+                    bot.send_message(chat_id=CHANNEL_ID, text=dummy_msg)
+                    last_post = {"text": dummy_msg, "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                    print("⚠️ Posted dummy deal instead (scraping empty)")
+            time.sleep(60)
         except Exception as e:
             print(f"❌ Loop error: {e}")
             time.sleep(10)
