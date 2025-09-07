@@ -1,7 +1,7 @@
-# app_test_mode.py
-# Immediate testing version - posts almost everything
+# app.py
+# Fixed so APScheduler + Flask both run
 
-import os, re, time, random, sqlite3, asyncio
+import os, re, time, random, asyncio, threading
 from urllib.parse import urljoin
 from dotenv import load_dotenv
 from datetime import datetime
@@ -14,15 +14,15 @@ from flask import Flask
 
 # ---------- config ----------
 load_dotenv(override=True)
-
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 bot = application.bot
 
-AMZ_INTERVAL_MIN = 10
-FK_INTERVAL_MIN = 8
+AMZ_INTERVAL_MIN = 2   # low for testing
+FK_INTERVAL_MIN = 3
+
 HEADERS_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/125.0",
@@ -78,10 +78,13 @@ def scrape_flipkart():
 
 # ---------- posting ----------
 def post_deals(items):
-    for it in items[:5]:  # limit to 5 per run for testing
+    if not items:
+        print("No deals found")
+        return
+    for it in items[:3]:  # limit to 3 for testing
         try:
             msg = (
-                f"🧪 TEST MODE\n\n"
+                f"🧪 TEST DEAL\n\n"
                 f"{it['source']} · {it['title']}\n"
                 f"💰 Price: ₹{it['price']}\n\n"
                 f"🔗 {it['link']}"
@@ -108,17 +111,25 @@ def home():
 
 @app.route("/status")
 def status():
-    return {"mode": "test", "amazon": "ok", "flipkart": "ok"}
+    return {"mode": "test", "amazon_interval": AMZ_INTERVAL_MIN, "flipkart_interval": FK_INTERVAL_MIN}
 
 # ---------- main ----------
 def main():
     print("⚡ Bot starting in TEST MODE")
     asyncio.run(bot.send_message(chat_id=CHANNEL_ID, text="✅ Bot in TEST MODE - expect spam deals"))
+
+    # Start scheduler
     sched = BackgroundScheduler()
     sched.add_job(job_amazon, "interval", minutes=AMZ_INTERVAL_MIN)
     sched.add_job(job_flipkart, "interval", minutes=FK_INTERVAL_MIN)
     sched.start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=False)
+
+    # Run Flask in separate thread
+    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=False, use_reloader=False)).start()
+
+    # Keep alive
+    while True:
+        time.sleep(60)
 
 if __name__ == "__main__":
     main()
