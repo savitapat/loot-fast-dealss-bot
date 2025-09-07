@@ -1,7 +1,7 @@
-# app.py – DEBUG MODE (GUARANTEED DEALS)
+# app.py – REAL DEAL FINDER BOT
 import os, re, time, random, sqlite3, asyncio
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify
@@ -27,7 +27,26 @@ DB = "deals.db"
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     'Accept-Language': 'en-US,en;q=0.9',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
 }
+
+# REAL PRODUCT SEARCH URLs
+REAL_PRODUCT_URLS = [
+    # Amazon Best Sellers
+    "https://www.amazon.in/gp/bestsellers/electronics/ref=zg_bs_electronics_sm",
+    "https://www.amazon.in/gp/bestsellers/computers/ref=zg_bs_computers_sm",
+    "https://www.amazon.in/gp/bestsellers/home-improvement/ref=zg_bs_home-improvement_sm",
+    
+    # Flipkart Top Deals
+    "https://www.flipkart.com/offers/deals-of-the-day",
+    "https://www.flipkart.com/offers/supercoin-zone",
+    
+    # Specific Product Searches (REAL products)
+    "https://www.amazon.in/s?k=earbuds+under+500&rh=p_36%3A1318505031",
+    "https://www.amazon.in/s?k=power+bank+under+1000",
+    "https://www.flipkart.com/search?q=earbuds+under+500&sort=popularity",
+    "https://www.flipkart.com/search?q=power+bank+under+1000&sort=popularity",
+]
 
 # ---------------- DB INIT ----------------
 def init_db():
@@ -37,19 +56,20 @@ def init_db():
             ts INTEGER,
             price INTEGER,
             discount INTEGER,
-            title TEXT
+            title TEXT,
+            link TEXT
         )""")
 
-def posted_recently(pid, hours=1):
+def posted_recently(pid, hours=4):
     cutoff = int(time.time()) - hours * 3600
     with sqlite3.connect(DB) as c:
         row = c.execute("SELECT 1 FROM posts WHERE pid=? AND ts>=?", (pid, cutoff)).fetchone()
     return bool(row)
 
-def mark_posted(pid, price, discount, title):
+def mark_posted(pid, price, discount, title, link):
     with sqlite3.connect(DB) as c:
-        c.execute("INSERT OR REPLACE INTO posts VALUES (?,?,?,?,?)",
-                  (pid, int(time.time()), price, discount, title))
+        c.execute("INSERT OR REPLACE INTO posts VALUES (?,?,?,?,?,?)",
+                  (pid, int(time.time()), price, discount, title, link))
 
 # ---------------- ASYNC TELEGRAM FUNCTIONS ----------------
 async def send_telegram_message(message):
@@ -75,63 +95,91 @@ def sync_send_message(message):
         print(f"❌ Async error: {e}")
         return False
 
-# ---------------- GUARANTEED DEAL FINDER ----------------
-def find_guaranteed_deals():
-    """Finds deals that are ALWAYS available"""
-    print("🔍 Finding GUARANTEED deals...")
-    
-    # These deals are almost always available
-    guaranteed_deals = [
-        {
-            "pid": "test_earbuds_1",
-            "platform": "AMAZON",
-            "title": "Boult Audio BassBuds Q2 TWS Earbuds with 40H Playtime",
-            "link": "https://www.amazon.in/dp/B0C5R8CZ5H?tag=lootfastdeals-21",
-            "price": 499,
-            "discount": 50
-        },
-        {
-            "pid": "test_powerbank_1", 
-            "platform": "FLIPKART",
-            "title": "Ambrane 10000mAh Power Bank with Fast Charging",
-            "link": "https://www.flipkart.com/ambrane-10000-mah-power-bank/p/itm",
-            "price": 599,
-            "discount": 40
-        },
-        {
-            "pid": "test_trimmer_1",
-            "platform": "AMAZON", 
-            "title": "Nova trimmer for men with 60min runtime",
-            "link": "https://www.amazon.in/dp/B08C5FY5Z5?tag=lootfastdeals-21",
-            "price": 399,
-            "discount": 60
-        },
-        {
-            "pid": "test_smartwatch_1",
-            "platform": "FLIPKART",
-            "title": "Fire-Boltt Ninja 2 Smart Watch with Blood Pressure Monitoring",
-            "link": "https://www.flipkart.com/fire-boltt-ninja-2-smartwatch/p/itm",
-            "price": 999,
-            "discount": 70
-        }
-    ]
-    
+# ---------------- REAL PRODUCT SCRAPER ----------------
+def fetch(url):
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        return r.text if r.status_code == 200 else ""
+    except Exception as e:
+        print(f"❌ Fetch failed: {e}")
+        return ""
+
+def parse_price(text):
+    if not text: return None
+    text = re.sub(r"[^\d]", "", text)
+    return int(text) if text.isdigit() and len(text) > 2 else None
+
+def add_affiliate_tag(url):
+    if AFFILIATE_TAG and "amazon.in" in url and "tag=" not in url:
+        return f"{url}{'&' if '?' in url else '?'}tag={AFFILIATE_TAG}"
+    return url
+
+def scrape_real_products():
+    """Finds REAL products that are actually available"""
     items = []
-    for deal in guaranteed_deals:
-        items.append((
-            deal["pid"],
-            deal["platform"], 
-            deal["title"],
-            deal["link"],
-            deal["price"],
-            deal["discount"]
-        ))
+    print("🔍 Scanning for REAL products...")
     
-    print(f"✅ Found {len(items)} guaranteed deals")
+    for url in REAL_PRODUCT_URLS:
+        html = fetch(url)
+        if not html: continue
+        
+        soup = BeautifulSoup(html, "lxml")
+        
+        if "amazon" in url:
+            # Amazon product selectors
+            products = soup.select('.s-result-item, .s-main-slot .s-card-border')
+            for product in products[:15]:
+                try:
+                    link_elem = product.select_one('a[href*="/dp/"]')
+                    if not link_elem: continue
+                    
+                    link = urljoin("https://www.amazon.in", link_elem["href"])
+                    link = add_affiliate_tag(link.split('?')[0])
+                    
+                    title_elem = product.select_one('.a-size-medium, .a-text-normal')
+                    title = title_elem.get_text(strip=True)[:80] if title_elem else "Amazon Product"
+                    
+                    price_elem = product.select_one('.a-price-whole')
+                    price = parse_price(price_elem.get_text()) if price_elem else None
+                    if not price or price > 2000: continue
+                    
+                    # Get product ASIN for unique ID
+                    asin_match = re.search(r'/dp/([A-Z0-9]{10})', link)
+                    pid = f"amz_{asin_match.group(1) if asin_match else hash(link)}"
+                    
+                    items.append((pid, "AMAZON", title, link, price, 30))  # Assume 30% discount
+                    
+                except Exception as e:
+                    continue
+                    
+        elif "flipkart" in url:
+            # Flipkart product selectors
+            products = soup.select('a._1fQZEK, a._2UzuFa, div._4ddWXP')
+            for product in products[:15]:
+                try:
+                    href = product.get("href")
+                    if not href: continue
+                    
+                    link = urljoin("https://www.flipkart.com", href.split('?')[0])
+                    
+                    title_elem = product.select_one('._4rR01T, .s1Q9rs')
+                    title = title_elem.get_text(strip=True)[:80] if title_elem else "Flipkart Product"
+                    
+                    price_elem = product.select_one('._30jeq3')
+                    price = parse_price(price_elem.get_text()) if price_elem else None
+                    if not price or price > 2000: continue
+                    
+                    pid = f"fk_{hash(link)}"
+                    items.append((pid, "FLIPKART", title, link, price, 35))  # Assume 35% discount
+                    
+                except Exception as e:
+                    continue
+    
+    print(f"✅ Found {len(items)} REAL products")
     return items
 
 # ---------------- POSTING ----------------
-def compose_message(item):
+def compose_real_message(item):
     pid, platform, title, link, price, discount = item
     
     message = f"🔥 {platform} DEAL\n\n"
@@ -143,9 +191,9 @@ def compose_message(item):
     
     return message
 
-def post_guaranteed_deals():
-    print("🚀 Posting guaranteed deals...")
-    deals = find_guaranteed_deals()
+def post_real_deals():
+    print("🚀 Posting REAL deals...")
+    deals = scrape_real_products()
     
     posted_count = 0
     for deal in deals:
@@ -154,39 +202,39 @@ def post_guaranteed_deals():
         if posted_recently(pid):
             continue
             
-        message = compose_message(deal)
+        message = compose_real_message(deal)
         if sync_send_message(message):
-            mark_posted(pid, price, discount, title)
-            print(f"📢 Posted: {title[:50]}...")
+            mark_posted(pid, price, discount, title, link)
+            print(f"📢 Posted REAL: {title[:50]}...")
             posted_count += 1
-            time.sleep(2)
+            time.sleep(3)
     
     return posted_count, deals
 
 # ---------------- MAIN LOOP ----------------
 last_post = {"text": None, "time": None, "count": 0}
 
-def guaranteed_deal_loop():
+def real_deal_loop():
     global last_post
     while True:
         try:
-            print("🔄 Scanning for guaranteed deals...")
-            posted_count, all_deals = post_guaranteed_deals()
+            print("🔄 Scanning for REAL deals...")
+            posted_count, all_deals = post_real_deals()
             
             if posted_count > 0:
                 last_post = {
-                    "text": f"Posted {posted_count} guaranteed deals",
+                    "text": f"Posted {posted_count} REAL deals",
                     "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "count": posted_count
                 }
-                print(f"✅ Posted {posted_count} deals")
+                print(f"✅ Posted {posted_count} REAL deals")
             else:
                 last_post = {
-                    "text": "No new deals to post",
+                    "text": "No new REAL deals found",
                     "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "count": 0
                 }
-                print("⚠️  No new deals this cycle")
+                print("⚠️  No REAL deals this cycle")
             
             wait_time = 300  # 5 minutes
             print(f"⏰ Next scan in {wait_time} seconds...")
@@ -199,15 +247,15 @@ def guaranteed_deal_loop():
 # ---------------- FLASK ROUTES ----------------
 @app.route("/")
 def home():
-    return "GUARANTEED DEALS BOT ✅ Running"
+    return "REAL DEAL FINDER BOT ✅ Running"
 
 @app.route("/status")
 def status():
     return jsonify(last_post)
 
-@app.route("/post-now")
-def post_now():
-    posted_count, all_deals = post_guaranteed_deals()
+@app.route("/post-real")
+def post_real():
+    posted_count, all_deals = post_real_deals()
     return jsonify({
         "posted": posted_count,
         "found": len(all_deals),
@@ -216,20 +264,20 @@ def post_now():
 
 # ---------------- MAIN ----------------
 def main():
-    print("🤖 Starting GUARANTEED DEALS BOT")
+    print("🤖 Starting REAL DEAL FINDER BOT")
     print(f"Channel: {CHANNEL_ID}")
     
     init_db()
     
     # Send startup message
-    startup_msg = "✅ GUARANTEED DEALS BOT STARTED!\n\nI will find deals that are always available!\n\nStay tuned for sure-shot deals! 🎯"
+    startup_msg = "✅ REAL DEAL FINDER BOT STARTED!\n\nNow scanning for ACTUAL products on Amazon & Flipkart!\n\nReal deals incoming! 🚀"
     if sync_send_message(startup_msg):
         print("✅ Startup message sent")
     
     # Start thread
-    t = Thread(target=guaranteed_deal_loop, daemon=True)
+    t = Thread(target=real_deal_loop, daemon=True)
     t.start()
-    print("✅ Guaranteed deals scanner started")
+    print("✅ Real deal scanner started")
     
     # Start Flask
     port = int(os.environ.get("PORT", 10000))
