@@ -5,3 +5,5 @@ beautifulsoup4
 lxml
 apscheduler
 python-telegram-bot==20.3
+selenium
+sqlite3
