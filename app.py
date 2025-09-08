@@ -1,32 +1,18 @@
-import os, re, time, random, sqlite3, requests, asyncio
+import os, re, time, sqlite3, requests, asyncio
 from datetime import datetime
 from flask import Flask, jsonify
 from dotenv import load_dotenv
-from telegram import Bot
 from apscheduler.schedulers.background import BackgroundScheduler
-
-# Selenium
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
+from bs4 import BeautifulSoup
+from telegram import Bot
 
 load_dotenv()
-
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-DB = "deal_history.db"
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "lootfastdeals-21")
+DB = "deal_history.db"
 app = Flask(__name__)
 bot = Bot(BOT_TOKEN)
-
-# Chrome headless for Render (no need for GUI)
-def get_driver():
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--no-sandbox')
-    # If running locally, set executable_path; for Render, use default
-    return webdriver.Chrome(options=chrome_options)
 
 def init_db():
     with sqlite3.connect(DB) as c:
@@ -55,7 +41,7 @@ def update_price_history(pid, title, price, platform, link):
 def was_posted_recently(pid, min_interval=1800):
     with sqlite3.connect(DB) as c:
         row = c.execute("SELECT last_post FROM deals WHERE pid=?", (pid,)).fetchone()
-    return row and row[0] and (int(time.time()) - row[0] < min_interval)
+    return row and row and (int(time.time()) - row < min_interval)
 
 async def send_telegram_async(msg):
     await bot.send_message(chat_id=CHANNEL_ID, text=msg, disable_web_page_preview=False)
@@ -69,64 +55,72 @@ def is_hot_deal(price, best_price, discount_thresh=40, drop_thresh=0.6):
     return price < best_price * drop_thresh or discount >= discount_thresh
 
 def scrape_amazon():
-    driver = get_driver()
-    driver.get("https://www.amazon.in/deals?ref_=nav_cs_gb")
-    time.sleep(3)
-    # Example selector for deal cards (update based on live HTML)
+    url = "https://www.amazon.in/gp/goldbox"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
     results = []
-    for card in driver.find_elements(By.CSS_SELECTOR, 'div[data-asin]'):
-        try:
-            title_elem = card.find_element(By.CSS_SELECTOR, 'span.a-text-normal')
-            price_elem = card.find_element(By.CSS_SELECTOR, 'span.a-price-whole')
-            link_elem = card.find_element(By.CSS_SELECTOR, 'a.a-link-normal')
-            title = title_elem.text[:60]
-            price = int(re.sub(r'\D', '', price_elem.text))
-            link = link_elem.get_attribute('href')
-            pid = 'amz_' + re.sub(r'\W+', '', link)[-16:]
-            results.append({
-                'pid': pid, 'title': title, 'price': price, 'platform': 'AMAZON', 'link': link
-            })
-        except Exception:
-            continue
-    driver.quit()
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(r.text, "lxml")
+        for card in soup.select('div[data-asin]'):
+            try:
+                title_elem = card.select_one('span.a-text-normal')
+                price_elem = card.select_one('span.a-price-whole')
+                link_elem = card.select_one('a.a-link-normal[href*="/dp/"]')
+                if not title_elem or not price_elem or not link_elem: continue
+                title = title_elem.text[:60]
+                price = int(re.sub(r'\D', '', price_elem.text))
+                link = "https://www.amazon.in" + link_elem.get('href').split('?')
+                if AFFILIATE_TAG and 'amazon.in' in link and 'tag=' not in link:
+                    link += ('&' if '?' in link else '?') + 'tag=%s' % AFFILIATE_TAG
+                pid = 'amz_' + re.sub(r'\W+', '', link)[-16:]
+                results.append({
+                    'pid': pid, 'title': title, 'price': price, 'platform': 'AMAZON', 'link': link
+                })
+            except Exception:
+                continue
+    except Exception as e:
+        print("Amazon scrape error:", e)
     return results
 
 def scrape_flipkart():
-    driver = get_driver()
-    driver.get("https://www.flipkart.com/offers-store")
-    time.sleep(3)
+    url = "https://www.flipkart.com/offers-store"
+    headers = {'User-Agent': 'Mozilla/5.0'}
     results = []
-    for card in driver.find_elements(By.CSS_SELECTOR, 'a.s1Q9rs, a._1fQZEK'):
-        try:
-            title = card.text[:60]
-            link = card.get_attribute('href')
-            parent = card.find_element(By.XPATH, '..')
-            price_elem = parent.find_element(By.CSS_SELECTOR, 'div._30jeq3')
-            price = int(re.sub(r'\D', '', price_elem.text))
-            pid = 'fk_' + re.sub(r'\W+', '', link)[-16:]
-            results.append({
-                'pid': pid, 'title': title, 'price': price, 'platform': 'FLIPKART', 'link': link
-            })
-        except Exception:
-            continue
-    driver.quit()
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(r.text, "lxml")
+        for a in soup.select('a.s1Q9rs, a._1fQZEK'):
+            try:
+                title = a.text[:80]
+                link = "https://www.flipkart.com" + a.get('href').split('?')
+                parent = a.find_parent()
+                price_elem = parent.select_one('div._30jeq3')
+                price = int(re.sub(r'\D', '', price_elem.text)) if price_elem else None
+                if not price: continue
+                pid = 'fk_' + re.sub(r'\W+', '', link)[-16:]
+                results.append({
+                    'pid': pid, 'title': title, 'price': price, 'platform': 'FLIPKART', 'link': link
+                })
+            except Exception:
+                continue
+    except Exception as e:
+        print("Flipkart scrape error:", e)
     return results
 
 def find_and_post_deals():
     for deal in scrape_amazon() + scrape_flipkart():
         pid, title, price, platform, link = deal['pid'], deal['title'], deal['price'], deal['platform'], deal['link']
         best_price = get_price_history(pid)[1]
-        # Alert if price error, very low, hot discount, or lowest ever
         hot = is_hot_deal(price, best_price)
         not_recent = not was_posted_recently(pid)
-        big_error = price < 499  # Example: Price error on TV, etc.
-        if hot or big_error or price < 999:
-            msg = f"🔥 {platform} DEAL\n\n🏷️ {title}\n\n💰 Price: ₹{price}\n" \
-                f"👉 {link}\n\n⚡ Lowest/Hot Deal!"
+        if (hot or not best_price) and not_recent:
+            msg = f"🔥 {platform} DEAL\n\n🏷️ {title}\n\n💰 Price: ₹{price}\n👉 {link}\n⚡ GRAB NOW! LIMITED STOCK!"
             send_telegram(msg)
             update_price_history(pid, title, price, platform, link)
 
-# Flask debug/status endpoints
 @app.route('/status')
 def status():
     with sqlite3.connect(DB) as c:
@@ -141,6 +135,6 @@ def debug():
 if __name__ == "__main__":
     init_db()
     scheduler = BackgroundScheduler()
-    scheduler.add_job(find_and_post_deals, 'interval', seconds=60) # every minute
+    scheduler.add_job(find_and_post_deals, 'interval', seconds=60)
     scheduler.start()
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)), debug=False)
