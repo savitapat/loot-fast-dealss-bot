@@ -1,4 +1,3 @@
-# app.py – WORKING DEAL BOT WITH UPDATED SELECTORS
 import os, re, time, random, sqlite3, asyncio
 from datetime import datetime
 from urllib.parse import urljoin
@@ -8,18 +7,16 @@ from flask import Flask, jsonify
 from threading import Thread
 from dotenv import load_dotenv
 from telegram import Bot
-from telegram.error import TelegramError
 
 # ---------------- CONFIG ----------------
 load_dotenv()
+
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "lootfastdeals-21")
-
 if not BOT_TOKEN or not CHANNEL_ID:
     raise ValueError("❌ TELEGRAM_TOKEN or CHANNEL_ID not set in environment!")
-
 bot = Bot(BOT_TOKEN)
 app = Flask(__name__)
 
@@ -34,15 +31,13 @@ HEADERS = {
 
 # UPDATED DEAL SOURCES (WORKING URLs)
 DEAL_SOURCES = [
-    # Amazon (Working URLs)
+    # Amazon
     "https://www.amazon.in/s?i=electronics&bbn=1389401031&rh=n%3A1389401031%2Cp_36%3A1318504031&dc&qid=1704567890&rnid=1318502031&ref=sr_nr_p_36_1",
     "https://www.amazon.in/deals?ref_=nav_cs_gb",
-    
-    # Flipkart (Working URLs)
+    # Flipkart
     "https://www.flipkart.com/electronics/audio-video/headphones/earbuds~type/pr?sid=0pm%2Cfcn&otracker=categorytree&p%5B%5D=facets.price_range.from%3DMin&p%5B%5D=facets.price_range.to%3D500",
     "https://www.flipkart.com/offers-store",
-    
-    # Specific searches that work
+    # Specific searches
     "https://www.amazon.in/s?k=earbuds&rh=p_36%3A1318504031-1318505031",
     "https://www.flipkart.com/search?q=power+bank&sort=popularity&p%5B%5D=facets.price_range.from%3DMin&p%5B%5D=facets.price_range.to%3D1000",
 ]
@@ -70,11 +65,10 @@ def mark_posted(pid, price, discount, title, link):
         c.execute("INSERT OR REPLACE INTO posts VALUES (?,?,?,?,?,?)",
                   (pid, int(time.time()), price, discount, title, link))
 
-# ---------------- UPDATED SCRAPING (WORKING SELECTORS) ----------------
+# ---------------- SCRAPING ----------------
 def fetch(url):
     try:
-        # Add random delay to avoid blocking
-        time.sleep(random.uniform(1, 3))
+        time.sleep(random.uniform(1, 2))
         r = requests.get(url, headers=HEADERS, timeout=20)
         print(f"🌐 Fetched {url} - Status: {r.status_code}")
         return r.text if r.status_code == 200 else ""
@@ -94,111 +88,74 @@ def add_affiliate_tag(url):
 
 def scrape_deals():
     items = []
-    print("🔍 Scanning for deals with UPDATED selectors...")
-    
+    print("🔍 Scanning for deals ...")
     for url in DEAL_SOURCES:
         html = fetch(url)
-        if not html: 
-            print(f"⚠️  No HTML for {url}")
+        if not html:
+            print(f"⚠️ No HTML for {url}")
             continue
-        
         soup = BeautifulSoup(html, "lxml")
         print(f"📊 Parsing {url} - HTML length: {len(html)}")
-        
-        # AMAZON - UPDATED SELECTORS (2024)
+
         if "amazon" in url:
-            # Try multiple selectors that currently work
             selectors = [
                 'div[data-component-type="s-search-result"]',
                 'div.s-result-item',
                 'div[data-asin]',
                 '.s-card-border'
             ]
-            
             for selector in selectors:
                 products = soup.select(selector)
-                print(f"🔍 Found {len(products)} products with {selector} on Amazon")
-                
                 for product in products[:10]:
                     try:
-                        # UPDATED LINK SELECTOR
                         link_elem = product.select_one('a.a-link-normal[href*="/dp/"]')
-                        if not link_elem:
-                            continue
-                        
+                        if not link_elem: continue
                         link = urljoin("https://www.amazon.in", link_elem["href"])
                         link = add_affiliate_tag(link.split('?')[0])
-                        
-                        # UPDATED TITLE SELECTOR
                         title_elem = product.select_one('span.a-text-normal, h2.a-size-mini')
                         title = title_elem.get_text(strip=True)[:80] if title_elem else "Amazon Deal"
-                        
-                        # UPDATED PRICE SELECTOR
                         price_elem = product.select_one('span.a-price-whole, span.a-offscreen')
                         price = parse_price(price_elem.get_text()) if price_elem else None
-                        
-                        if not price or price > 2000:
-                            continue
-                        
+                        if not price or price > 2000: continue
                         pid = f"amz_{hash(link)}"
                         items.append((pid, "AMAZON", title, link, price, 30))
-                        print(f"✅ Amazon product: {title[:30]} - ₹{price}")
-                        
-                    except Exception as e:
+                    except Exception:
                         continue
-                        print(f"❌ Amazon product error: {e}")
-        
-        # FLIPKART - UPDATED SELECTORS (2024)
+
         elif "flipkart" in url:
-            # Try multiple selectors that currently work
             selectors = [
                 'div[data-id]',
                 'a._1fQZEK',
                 'div._4ddWXP',
                 'a._2UzuFa'
             ]
-            
             for selector in selectors:
                 products = soup.select(selector)
-                print(f"🔍 Found {len(products)} products with {selector} on Flipkart")
-                
                 for product in products[:10]:
                     try:
-                        # UPDATED LINK SELECTOR
-                        if selector == 'div[data-id]' or selector == 'div._4ddWXP':
+                        if selector in ['div[data-id]', 'div._4ddWXP']:
                             link_elem = product.select_one('a')
                         else:
                             link_elem = product
-                        
                         href = link_elem.get("href") if link_elem else None
-                        if not href:
-                            continue
-                        
+                        if not href: continue
                         link = urljoin("https://www.flipkart.com", href.split('?')[0])
-                        
-                        # UPDATED TITLE SELECTOR
                         title_elem = product.select_one('a._4rR01T, a.s1Q9rs, div._4rR01T')
                         title = title_elem.get_text(strip=True)[:80] if title_elem else "Flipkart Deal"
-                        
-                        # UPDATED PRICE SELECTOR
                         price_elem = product.select_one('div._30jeq3, div._1_WHN1')
                         price = parse_price(price_elem.get_text()) if price_elem else None
-                        
-                        if not price or price > 2000:
-                            continue
-                        
+                        if not price or price > 2000: continue
                         pid = f"fk_{hash(link)}"
                         items.append((pid, "FLIPKART", title, link, price, 35))
-                        print(f"✅ Flipkart product: {title[:30]} - ₹{price}")
-                        
-                    except Exception as e:
+                    except Exception:
                         continue
-                        print(f"❌ Flipkart product error: {e}")
-    
     print(f"✅ Total found: {len(items)} deals")
     return items
 
-# ---------------- TELEGRAM FUNCTIONS ----------------
+# ---------------- TELEGRAM FUNCTIONS (WITH GLOBAL LOOP) ----------------
+main_loop = asyncio.new_event_loop()
+asyncio.set_event_loop(main_loop)
+
 async def send_telegram_message_async(message):
     try:
         await bot.send_message(
@@ -213,48 +170,38 @@ async def send_telegram_message_async(message):
 
 def send_telegram_message_safe(message):
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(send_telegram_message_async(message))
-        loop.close()
-        return result
+        future = asyncio.run_coroutine_threadsafe(send_telegram_message_async(message), main_loop)
+        return future.result(timeout=15)
     except Exception as e:
         print(f"❌ Async error: {e}")
         return False
 
-# ---------------- POSTING ----------------
+# ---------------- POSTING AND LOOP ----------------
 def compose_message(item):
     pid, platform, title, link, price, discount = item
-    
     message = f"🔥 {platform} DEAL\n\n"
     message += f"🏷️ {title}\n\n"
     message += f"💰 Price: ₹{price}\n"
     message += f"🎯 Discount: {discount}% OFF\n\n"
     message += f"👉 {link}\n\n"
     message += f"⚡ GRAB NOW! LIMITED STOCK!"
-    
     return message
 
 def post_deals():
     deals = scrape_deals()
-    
     posted_count = 0
     for deal in deals:
         pid, platform, title, link, price, discount = deal
-        
         if posted_recently(pid):
             continue
-            
         message = compose_message(deal)
         if send_telegram_message_safe(message):
             mark_posted(pid, price, discount, title, link)
             print(f"📢 Posted: {title[:50]}...")
             posted_count += 1
-            time.sleep(3)
-    
+        time.sleep(3)
     return posted_count, deals
 
-# ---------------- MAIN LOOP ----------------
 last_post = {"text": None, "time": None, "count": 0}
 
 def deal_loop():
@@ -263,7 +210,6 @@ def deal_loop():
         try:
             print("🔄 Starting scan cycle...")
             posted_count, all_deals = post_deals()
-            
             if posted_count > 0:
                 last_post = {
                     "text": f"Posted {posted_count} deals",
@@ -277,12 +223,10 @@ def deal_loop():
                     "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "count": 0
                 }
-                print("⚠️  No deals this cycle")
-            
+                print("⚠️ No deals this cycle")
             wait_time = 300
             print(f"⏰ Next scan in {wait_time} seconds...")
             time.sleep(wait_time)
-            
         except Exception as e:
             print(f"❌ Loop error: {e}")
             time.sleep(60)
@@ -317,18 +261,16 @@ def debug():
 def main():
     print("🤖 Starting UPDATED DEAL BOT")
     print(f"Channel: {CHANNEL_ID}")
-    print("🔧 Using updated 2024 selectors")
-    
+    print("🔧 Using updated selectors and global event loop")
     init_db()
-    
-    startup_msg = "🔄 UPDATED DEAL BOT RESTARTED!\n\nUsing latest 2024 selectors\nScanning for real deals...\n\nStay tuned! 🚀"
-    if send_telegram_message_safe(startup_msg):
-        print("✅ Startup message sent")
-    
-    t = Thread(target=deal_loop, daemon=True)
-    t.start()
+    # Start persistent asyncio loop in background thread:
+    Thread(target=main_loop.run_forever, daemon=True).start()
+    # Send restart message (optional)
+    startup_msg = "🔄 UPDATED DEAL BOT RESTARTED!\n\nUsing latest selectors.\nScanning for real deals...\nStay tuned! 🚀"
+    send_telegram_message_safe(startup_msg)
+    # Start deal scan loop in background thread
+    Thread(target=deal_loop, daemon=True).start()
     print("✅ Scanner started")
-    
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, debug=False)
 
